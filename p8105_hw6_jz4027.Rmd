@@ -1,0 +1,53 @@
+---
+title: "p8105_hw6_jz4027"
+author: "Charlotte Zhang"
+date: "2025-11-27"
+output: html_document
+---
+```{r}
+library(tidyverse)
+library(broom)
+```
+# Problem 1
+```{r}
+url <- "https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv"
+p1_df <- readr::read_csv(url, na = c("NA", ".", "")) |> janitor::clean_names()
+```
+
+```{r}
+# create city_state variable
+# create a binary variable indicating whether the homicide is solved
+# Omit cities
+# victim_race is white or black
+# victim_age is numeric
+
+p1_df_cleaned <- p1_df |>
+  mutate(city_state = paste(city, state, sep = ", ")) |>
+  group_by(city_state) |>
+  mutate(disposition_solved = 
+           ifelse(disposition == "Closed by arrest" | disposition == "Closed without arrest", 1, 0)) |>
+  filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")) |>
+  filter(victim_race %in% c("White", "Black")) |>
+  mutate(victim_age = as.numeric(victim_age)) 
+
+p1_df_cleaned 
+```
+
+```{r}
+# filter out Baltimore MD
+baltimore <- p1_df_cleaned |> 
+  filter(city_state == "Baltimore, MD")
+
+# logistic regression
+baltimore_glm <- glm(disposition_solved ~ victim_age + victim_sex + victim_race, 
+                     data = baltimore, 
+                     family = binomial)
+
+# tidy, and get odds ratio and CI, comparing male victims to female victims
+baltimore_tidy <- broom::tidy(baltimore_glm, exponentiate = TRUE, conf.int = TRUE) 
+
+or_sex <- baltimore_tidy |>
+  filter(term == "victim_sexMale") |>
+  select(term, estimate, conf.low, conf.high)
+or_sex
+```
