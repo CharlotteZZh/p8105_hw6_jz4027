@@ -46,8 +46,41 @@ baltimore_glm <- glm(disposition_solved ~ victim_age + victim_sex + victim_race,
 # tidy, and get odds ratio and CI, comparing male victims to female victims
 baltimore_tidy <- broom::tidy(baltimore_glm, exponentiate = TRUE, conf.int = TRUE) 
 
-or_sex <- baltimore_tidy |>
+or_baltimore_sex <- baltimore_tidy |>
   filter(term == "victim_sexMale") |>
   select(term, estimate, conf.low, conf.high)
-or_sex
+or_baltimore_sex
 ```
+
+```{r}
+# Odds ratio and CI for every city
+or_cities_sex <- p1_df_cleaned |>
+  group_by(city_state) |>
+  nest() |>
+  mutate(model = map(data, ~glm(solved ~ victim_age + victim_sex + victim_race, 
+                                data = ., 
+                                family = binomial)),
+         tidy_out = map(model, ~tidy(., exponentiate = TRUE, conf.int = TRUE, conf.level = 0.95))) |>
+  unnest(tidy_out) |>
+  filter(term == "victim_sexMale") |>
+  select(city_state, estimate, conf.low, conf.high)
+
+or_cities_sex
+```
+
+```{r}
+or_cities_sex |>
+  ggplot(aes(x = reorder(city_state, estimate), y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "purple") +
+  coord_flip() +
+  labs(
+    title = "Estimated ORs and CIs (95%) for each city",
+    subtitle = "Male vs. Femlae",
+    x = "City",
+    y = "Adjusted Odds Ratio"
+  ) +
+  theme(axis.text.y = element_text(size = 6))
+```
+For most cities (except for Fresno, Minneapolis, and Stockton), the estimated odds ratio is less than 1, indicating that the odds of homicides being solved are lower for male victims compared to female victims, even when factors like race and age are controlled. Then for many cities, their confidence interval is completely below 1, suggesting that the difference is not due to random chance and is statistically significant. 
