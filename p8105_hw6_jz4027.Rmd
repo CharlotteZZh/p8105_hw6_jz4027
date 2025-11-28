@@ -9,6 +9,8 @@ library(tidyverse)
 library(broom)
 library(patchwork)
 library(p8105.datasets)
+library(modelr)
+library(mgcv)
 ```
 # Problem 1
 ```{r}
@@ -59,7 +61,7 @@ or_baltimore_sex
 or_cities_sex <- p1_df_cleaned |>
   group_by(city_state) |>
   nest() |>
-  mutate(model = map(data, ~glm(solved ~ victim_age + victim_sex + victim_race, 
+  mutate(model = map(data, ~glm(disposition_solved ~ victim_age + victim_sex + victim_race, 
                                 data = ., 
                                 family = binomial)),
          tidy_out = map(model, ~tidy(., exponentiate = TRUE, conf.int = TRUE, conf.level = 0.95))) |>
@@ -123,6 +125,7 @@ ci_ratio <- quantile(bootstrap_stats$beta_ratio, c(0.025, 0.975))
 ```
 
 ```{r}
+# plot
 r2_plot <- ggplot(bootstrap_stats, aes(x = r_squared)) +
   geom_histogram(bins = 40, fill = "orange", color = "white") +
   theme_minimal()
@@ -137,5 +140,106 @@ beta_plot <- ggplot(bootstrap_stats, aes(x = beta_ratio)) +
     subtitle = "Linear Regression: tmax ~ tmin + prcp"
   )
 ```
+
 * The 95% confidence interval for r-squared is `r ci_r2`, which is pretty narrow. The distribution is approximately symmetric, bell-shaped, and centered around 0.941. This shows that the simple linear regression model provides consistent and stable r^2 (proportion of variance explained in tmax) of the bootstrapped datasets, tmin + prcp are reliable predictors of tmax.  
+
 * The 95% confidence interval for beta ratio is `r ci_ratio`. The CI is wider, negative, and the distribution is centered around -170, highly skewed to the left. This suggest that the estimated beta ratio is unstable because beta2 (precipitation) is noisy and small. 
+
+# Problem 3
+```{r}
+# Load and clean the data
+p3_data <- read_csv("birthweight.csv") |> 
+  janitor::clean_names() |>
+  mutate(
+    babysex = factor(babysex, levels = c(1,2), labels = c("Male", "Female")),
+    frace = factor(frace, levels = c(1,2,3,4,8,9),
+                   labels = c("White", "Black", "Asian", "Puerto Rican", "Other", "Unknown")),
+    mrace = factor(mrace, levels = c(1,2,3,4,8),
+                   labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
+    malform = factor(malform, levels = c(0,1), labels = c("Absent", "Present")),
+    across(-c(babysex, frace, mrace, malform), as.numeric)
+  )
+
+colSums(is.na(p3_data))
+```
+```{r}
+# check correlation
+p3_data_num <- p3_data |> select(where(is.numeric)) |>
+  select(where(~ any(.x != 0)))
+
+cor_with_bwt <- cor(p3_data_num, use = "complete.obs")[, "bwt"]
+cor_with_bwt <- cor_with_bwt[names(cor_with_bwt) != "bwt"]
+
+cor_table <- tibble(
+  variable = names(cor_with_bwt),
+  correlation = cor_with_bwt
+)
+
+ggplot(cor_table, aes(x = reorder(variable, correlation), y = correlation)) +
+  geom_col(fill = "grey") +
+  coord_flip() +
+  geom_text(
+    aes(label = round(correlation, 2))) +
+  labs(title = "Correlation with Birthweight (bwt)",
+       x = "Variable",
+       y = "Correlation") +
+  theme_minimal()
+```
+
+```{r}
+p3_model1 <- lm(bwt ~ bhead + blength + babysex + frace + mrace + malform,
+             data = p3_data)
+
+p3_data |>
+  add_predictions(p3_model1, var = "pred") |>
+  add_residuals(p3_model1, var = "resid") |>
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0, color = "blue", linetype = "dashed") +
+  labs(x = "Fitted values (pred)", y = "Residuals",
+       title = "Residuals vs Fitted Values") +
+  theme_minimal()
+```
+For this regression model, I checked the correlation between birth weight and other numerical variables, and included the two with the highest correlation in model1. I also included all categorical variables, like babysex, frace, mrace, and malform, in model1 because these factors are commonly hypothesized to affect birthweight. Looking at the plot, residuals for larger fitted values are centered around 0 and clustered, while residuals for small fitted values are more spread with some outliers. Overall, the linear regression model predicts birthweight reasonably well
+
+```{r}
+# cross validation
+cv_df <- crossv_mc(p3_data, 100) |>   
+  mutate(
+    train = map(train, as_tibble),
+    test  = map(test, as_tibble)
+  )
+
+cv_df <- cv_df |> 
+  mutate(
+    p3_model1 = map(train, \(df) lm(bwt ~ bhead + blength + babysex + frace + mrace + malform, data = df)),
+    p3_model2 = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+    p3_model3 = map(train, \(df) lm(bwt ~ (bhead + blength + babysex)^3, data = df))
+  ) |>
+  mutate(
+    rmse_model1 = map2_dbl(p3_model1, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_model2 = map2_dbl(p3_model2, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_model3 = map2_dbl(p3_model3, test, \(mod, df) rmse(model = mod, data = df)))
+```
+
+```{r}
+# plot
+cv_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) |> 
+  mutate(model = fct_inorder(model)) |> 
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin(fill = "pink", alpha = 0.5) +
+  geom_boxplot(width = 0.1, outlier.shape = NA) +
+  labs(title = "Cross-validated RMSE for Birthweight",
+       x = "Model",
+       y = "RMSE (grams)") +
+  theme_minimal()
+```
+
+My model (model 1) performs the best because its median rmse is approximately 280, which is smaller than model 2's rmse of 330 and the model 3's rmse of 285-290. Also, model 1 has the smallest spread among the three, suggesting a better stability. Model 2 has the worst performance overall. 
