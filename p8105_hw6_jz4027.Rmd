@@ -7,6 +7,8 @@ output: html_document
 ```{r}
 library(tidyverse)
 library(broom)
+library(patchwork)
+library(p8105.datasets)
 ```
 # Problem 1
 ```{r}
@@ -84,3 +86,56 @@ or_cities_sex |>
   theme(axis.text.y = element_text(size = 6))
 ```
 For most cities (except for Fresno, Minneapolis, and Stockton), the estimated odds ratio is less than 1, indicating that the odds of homicides being solved are lower for male victims compared to female victims, even when factors like race and age are controlled. Then for many cities, their confidence interval is completely below 1, suggesting that the difference is not due to random chance and is statistically significant. 
+
+# Problem 2
+```{r}
+# Load the data
+data("weather_df")
+
+# bootstrap
+bootstrap_stats <- weather_df |> 
+  modelr::bootstrap(n = 5000) |> 
+  mutate(
+    linear_reg = map(strap, ~ lm(tmax ~ tmin + prcp, data = .x)),
+    estimates = map(linear_reg, function(model) {
+      
+      coefs <- tidy(model) |> 
+        filter(term %in% c("tmin", "prcp")) |> 
+        select(term, estimate) |> 
+        pivot_wider(names_from = term, values_from = estimate)
+      
+      r2 <- glance(model)$r.squared
+      
+      ratio <- coefs$tmin / coefs$prcp
+      
+      tibble(r_squared = r2, beta_ratio = ratio)
+    })
+  ) |> 
+  unnest(estimates) |> 
+  select(-strap, -linear_reg)
+
+bootstrap_stats
+
+# CI
+ci_r2 <- quantile(bootstrap_stats$r_squared, c(0.025, 0.975))
+ci_ratio <- quantile(bootstrap_stats$beta_ratio, c(0.025, 0.975))
+
+```
+
+```{r}
+r2_plot <- ggplot(bootstrap_stats, aes(x = r_squared)) +
+  geom_histogram(bins = 40, fill = "orange", color = "white") +
+  theme_minimal()
+
+beta_plot <- ggplot(bootstrap_stats, aes(x = beta_ratio)) +
+  geom_histogram(bins = 40, fill = "lightgreen", color = "white") +
+  theme_minimal()
+
+(r2_plot | beta_plot) +
+  plot_annotation(
+    title = "Distribution of Bootstrap Estimates of R^2 and β1/β2",
+    subtitle = "Linear Regression: tmax ~ tmin + prcp"
+  )
+```
+* The 95% confidence interval for r-squared is `r ci_r2`, which is pretty narrow. The distribution is approximately symmetric, bell-shaped, and centered around 0.941. This shows that the simple linear regression model provides consistent and stable r^2 (proportion of variance explained in tmax) of the bootstrapped datasets, tmin + prcp are reliable predictors of tmax.  
+* The 95% confidence interval for beta ratio is `r ci_ratio`. The CI is wider, negative, and the distribution is centered around -170, highly skewed to the left. This suggest that the estimated beta ratio is unstable because beta2 (precipitation) is noisy and small. 
